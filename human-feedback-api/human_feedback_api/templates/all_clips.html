@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% load staticfiles %}
+{% block content %}
+
+<ul>
+{% for clip in clips %}
+    <li><a href="{{ clip.media_url }}" target="_blank">{{ clip.media_url }}</a></li>
+{% endfor %}
+</ul>
+
+{% endblock %}

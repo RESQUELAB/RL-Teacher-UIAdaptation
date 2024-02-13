@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% load staticfiles %}
+{% block content %}
+
+<canvas id="backdrop" style="position: absolute; left: 0px; top: 0px;" width="{{ total.width }}px" height="{{ total.height }}px"></canvas>
+<script>
+  var canvas = document.getElementById("backdrop");
+  var ctx = canvas.getContext("2d");
+  ctx.fillStyle = "white";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.lineWidth = 15;
+  ctx.strokeStyle = "grey";
+  {% for node in tree %}
+    ctx.beginPath();
+    ctx.moveTo({{ node.x_position }}, {{ node.y_position }});
+    ctx.lineTo({{ node.parent_x_pos }}, {{ node.parent_y_pos }});
+    ctx.stroke();
+  {% endfor %}
+</script>
+
+{% for node in tree %}
+  <div id="{{ node.id }}" style="
+    position: absolute;
+    left: {{ node.left_edge }}px;
+    top: {{ node.top_edge }}px;
+    background-color: {{ node.color }};
+    width: 100px;
+    height: 180px;
+    text-align: center;
+    padding: 5px;
+    border-radius: 15px;
+    color: {{ node.text_color }};">
+    Node {{ node.name }}
+    <video width="84px" loop>
+      <source type="video/mp4"/>
+    </video>
+    Bound: {{ node.num_bound_clips }}<br/>
+    Pending: {{ node.num_pending_clips }}<br/>
+    <script>
+      (function() {
+        var nodeId = '{{ node.id }}';
+        var clipIndex = 0;
+        var clips = [
+          {% for clip in node.bound_clips %}
+            '{{ clip }}',
+          {% endfor %}
+        ];
+        function changeClip() {
+          $('#'+nodeId+' video').attr('src', clips[clipIndex]);
+          $('#'+nodeId+' video').attr('title', clips[clipIndex]);
+          $('#'+nodeId+' video').trigger('play');
+          clipIndex = (clipIndex + 1) % clips.length;
+        }
+        changeClip();
+        $('#'+nodeId+' video').click(changeClip);
+      })();
+    </script>
+  </div>
+
+{% endfor %}
+
+{% endblock %}
