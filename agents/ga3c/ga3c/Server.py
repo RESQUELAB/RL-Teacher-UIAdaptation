@@ -42,15 +42,24 @@ from ga3c.ThreadTrainer import ThreadTrainer
 class Server:
     def __init__(self, reward_modifier=None):
         self.stats = ProcessStats()
+        self.user = None
+        self.domain = None
 
         if reward_modifier:
             self.reward_modifier_q = Queue(maxsize=Config.MAX_QUEUE_SIZE)
             self.reward_modifier = reward_modifier
+            self.user = reward_modifier.user
+            self.domain = reward_modifier.domain
+            
 
         self.training_q = Queue(maxsize=Config.MAX_QUEUE_SIZE)
         self.prediction_q = Queue(maxsize=Config.MAX_QUEUE_SIZE)
 
-        self.model = NetworkVP(Config.DEVICE, Config.NETWORK_NAME, Environment().get_num_actions())
+        self.model = NetworkVP(Config.DEVICE, 
+                               Config.NETWORK_NAME, 
+                               Environment().get_num_actions(),
+                               user = self.user,
+                               domain = self.domain)
         if Config.LOAD_CHECKPOINT:
             self.stats.episode_count.value = self.model.try_to_load()
 
@@ -64,31 +73,61 @@ class Server:
 
     def add_agent(self):
         self.agents.append(ProcessAgent(
-            len(self.agents), self.prediction_q, self.training_q, self.stats.episode_log_q, self.reward_modifier_q))
+            len(self.agents), self.prediction_q, self.training_q, self.stats.episode_log_q, self.reward_modifier_q,
+            env=Config.ENV, parentStats=self.stats))
         self.agents[-1].run()
 
     def remove_agent(self):
-        self.agents[-1].exit_flag.value = True
-        self.agents[-1].join()
-        self.agents.pop()
+        if self.agents:
+            agent = self.agents[-1]
+            agent.exit_flag.value = True
+            if agent.is_alive():
+                agent.join()
+            self.agents.pop()
+        else:
+            print("No agents to remove.")
 
     def add_predictor(self):
         self.predictors.append(ThreadPredictor(self, len(self.predictors)))
         self.predictors[-1].start()
 
     def remove_predictor(self):
-        self.predictors[-1].exit_flag = True
-        self.predictors[-1].join()
-        self.predictors.pop()
+        if self.predictors:
+            predictor = self.predictors[-1]
+            predictor.exit_flag = True
+            if predictor.is_alive():
+                print("joinning predictor")
+                predictor.join()
+                print("predictor joinned")
+            self.predictors.pop()
+        else:
+            print("No predictors to remove.")
 
     def add_trainer(self):
         self.trainers.append(ThreadTrainer(self, len(self.trainers)))
         self.trainers[-1].start()
 
     def remove_trainer(self):
-        self.trainers[-1].exit_flag = True
-        self.trainers[-1].join()
-        self.trainers.pop()
+        if self.trainers:
+            trainer = self.trainers[-1]
+            trainer.exit_flag = True
+            if trainer.is_alive():
+                print("joinning trainner")
+                trainer.join()
+                print("trainer joinned")
+            self.trainers.pop()
+        else:
+            print("No trainers to remove.")
+
+    def remove_statsProces(self):
+        if self.stats:
+            self.stats.exit_flag.value = 1
+            if self.stats.is_alive():
+                print("joining the stats Process")
+                self.stats.join()
+                print("Stats Process joinned")
+        else:
+            print("No stats to remove.")
 
     def train_model(self, x_, r_, a_, trainer_id):
         self.model.train(x_, r_, a_, trainer_id)
@@ -111,12 +150,19 @@ class Server:
         self.dynamic_adjustment.start()
 
         if Config.PLAY_MODE:
+            print("\n\n\n")
+            print("WE ARE IN PLAY MODE!!! NO TRAINNERS!!")
+            print("\n\n\n")
             for trainer in self.trainers:
                 trainer.enabled = False
-
+        else:
+            print("\n\n\n")
+            print("WE ARE NOT IN PLAY MODE!!! GETTING DA TRAINNERS!!")
+            print(Config.SAVE_MODELS)
+            print("\n\n\n")
+            
         learning_rate_multiplier = (Config.LEARNING_RATE_END - Config.LEARNING_RATE_START) / Config.ANNEALING_EPISODE_COUNT
         beta_multiplier = (Config.BETA_END - Config.BETA_START) / Config.ANNEALING_EPISODE_COUNT
-
         while self.stats.episode_count.value < Config.EPISODES:
             step = min(self.stats.episode_count.value, Config.ANNEALING_EPISODE_COUNT - 1)
             self.model.learning_rate = Config.LEARNING_RATE_START + learning_rate_multiplier * step
@@ -136,8 +182,8 @@ class Server:
                     source_id, done, path = self.reward_modifier_q.get()
                     rewards = self.reward_modifier.predict_reward(path)
 
-                    if done:
-                        self.reward_modifier.path_callback(path)
+                    # if done:
+                    #     self.reward_modifier.path_callback(path)
 
                     self.agents[source_id].wait_q.put(rewards)
                 ################################
@@ -153,3 +199,5 @@ class Server:
             self.remove_predictor()
         while self.trainers:
             self.remove_trainer()
+        self.remove_statsProces()
+        print("Finished the Server MAIN.")

@@ -26,11 +26,20 @@
 
 
 class GameManager:
-    def __init__(self, game_name, make_game, display):
+    def __init__(self, game_name, make_game, display, env=None):
+        
         self.display = display
         self.game_name = game_name
-        self.env = make_game(game_name)
+        # If the ENV is passed as argument, we assume that 
+        # there is no need to instantiate it. 
+        if env is not None:
+            self.env = env
+        else:
+            self.env = make_game(game_name)
         self.reset()
+
+    def is_uiadapt(self):
+        return "uiadapt" in self.game_name.lower()
 
     def is_atari(self):
         # Returns false if the space has already been compressed.

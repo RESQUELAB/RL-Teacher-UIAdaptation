@@ -5,20 +5,100 @@ from datetime import timedelta, datetime
 from django import template
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.utils import timezone
 
 from human_feedback_api.models import Comparison
 from human_feedback_api.models import SortTree
+
+from human_feedback_api.models import TrainingCompletion
+
+from rl_teacher.clip_manager import ClipManager
+
 from human_feedback_api.models import Clip
 
 import human_feedback_api.redblack_tree as redblack
 
-register = template.Library()
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.forms import AuthenticationForm
+# from django.contrib.auth.decorators import login_required
+
+from .forms import CustomUserCreationForm
+
+from rest_framework import permissions, status
+from rest_framework.response import Response
+from rest_framework.decorators import api_view
+from django.contrib.auth.models import User
+from rest_framework.authtoken.models import Token
+
+from django.contrib.auth.decorators import login_required
+
+import json
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+
+# def register(request):
+#     if request.method == 'POST':
+#         form = CustomUserCreationForm(request.POST)
+#         if form.is_valid():
+#             user = form.save()
+#             login(request, user)
+#             # Create a SortTree instance for the new user
+#             SortTree.objects.create(experiment_name=f"Tree for {user.username}", user=user)
+#             return redirect('index')
+#     else:
+#         form = CustomUserCreationForm()
+#     return render(request, 'register.html', {'form': form})
+
+def user_login(request):
+    if request.method == 'POST':
+        form = AuthenticationForm(request, data=request.POST)
+        if form.is_valid():
+            user = form.get_user()
+            login(request, user)
+            import subprocess
+
+            # Execute the external command for each domain
+            try:
+
+                print("EXPERIMENT_NAME:")
+                experimentName = request.GET.get("experimentName", "default")
+                courses_process = subprocess.Popen(
+                    [
+                        'python', 'rl_teacher/launch_clip_manager.py',
+                        '-e', 'UIAdaptation-v0',
+                        '-n', experimentName,
+                        '-d', 'courses',
+                        '-u', str(user.id),
+                        '-w', '1'
+                    ]
+                )
+
+                trips_process = subprocess.Popen(
+                    [
+                        'python', 'rl_teacher/launch_clip_manager.py',
+                        '-e', 'UIAdaptation-v0',
+                        '-n', experimentName,
+                        '-d', 'trips',
+                        '-u', str(user.id),
+                        '-w', '1'
+                    ]
+                )
+
+            except subprocess.CalledProcessError as e:
+                print(f"Command failed: {e}")
+                return Response({'error': 'Failed to create SortTree via command'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return redirect('index')  # Redirect to a success page
+    else:
+        username = request.GET.get("username", "")
+        form = AuthenticationForm(initial={'username': username})
+    return render(request, 'login.html', {'form': form})
 
 ExperimentResource = namedtuple("ExperimentResource", ['name', 'num_responses', 'started_at', 'pretty_time_elapsed'])
 
 def _pretty_time_elapsed(start, end):
+    if start is None or end is None:
+        return ("{:0>2}:{:0>2}:{:0>2}".format(0, 0, 0))
     total_seconds = (end - start).total_seconds()
     hours, rem = divmod(total_seconds, 3600)
     minutes, seconds = divmod(rem, 60)
@@ -27,8 +107,12 @@ def _pretty_time_elapsed(start, end):
 def _build_experiment_resource(experiment_name):
     comparisons = Comparison.objects.filter(experiment_name=experiment_name, responded_at__isnull=False)
     try:
-        started_at = comparisons.order_by('-created_at').first().created_at
-        pretty_time_elapsed = _pretty_time_elapsed(started_at, timezone.now())
+        started_at = comparisons.order_by('-created_at').first()
+        started_at = started_at.created_at if started_at else None
+        
+        now = timezone.now()  
+
+        pretty_time_elapsed = _pretty_time_elapsed(started_at, now)
     except AttributeError:
         started_at = None
         pretty_time_elapsed = None
@@ -39,9 +123,9 @@ def _build_experiment_resource(experiment_name):
         pretty_time_elapsed=pretty_time_elapsed
     )
 
-def _all_comparisons(experiment_name, use_locking=False):
+def _all_comparisons(experiment_name, domain, user, use_locking=False):
     not_responded = Q(responded_at__isnull=True)
-
+    
     if use_locking:
         cutoff_time = timezone.now() - timedelta(minutes=2)
         not_in_progress = Q(shown_to_tasker_at__isnull=True) | Q(shown_to_tasker_at__lte=cutoff_time)
@@ -50,15 +134,40 @@ def _all_comparisons(experiment_name, use_locking=False):
     else:
         ready = not_responded
 
-    # Sort by priority, then put newest labels first
-    return Comparison.objects.filter(ready, experiment_name=experiment_name).order_by('-priority', '-created_at')
+    # Filter by experiment name, domain, and user
+    comparisons = Comparison.objects.filter(
+        ready,
+        experiment_name=experiment_name,
+        user=user
+    ).filter(tree_node__domain=domain)
 
+    # Sort by priority, then put newest labels first
+    return comparisons.order_by('-priority', '-created_at')
+
+@login_required
 def index(request):
-    binary_tree_experiments = set([name for name in SortTree.objects.filter(parent=None).order_by().values_list('experiment_name', flat=True)])
-    all_comparison_experiments = [name for name in Comparison.objects.order_by().values_list('experiment_name', flat=True)]
+    # Fetch all distinct binary tree experiments with their domain from SortTree
+    binary_tree_experiments = set(
+        (tree.experiment_name, tree.domain) for tree in SortTree.objects.filter(user=request.user, parent=None)
+    )
+
+    # Fetch all comparison experiments and their related domains through the SortTree
+    all_comparison_experiments = [
+        (comparison.experiment_name, comparison.tree_node.domain) 
+        for comparison in Comparison.objects.select_related('tree_node').filter(tree_node__user=request.user)
+        if comparison.tree_node
+    ]
+
+    # Get other experiments that are in comparisons but not in binary trees
     other_experiments = set(all_comparison_experiments) - binary_tree_experiments
+
+    # Render the experiments and domains in the context
     return render(request, 'index.html', context={
-        'binary_tree_experiments': binary_tree_experiments, 'other_experiments': other_experiments})
+        'binary_tree_experiments': binary_tree_experiments,
+        'other_experiments': other_experiments,
+        'username': request.user.username 
+    })
+
 
 def list_comparisons(request, experiment_name):
     comparisons = Comparison.objects.filter(experiment_name=experiment_name).order_by('responded_at', '-priority')
@@ -71,9 +180,10 @@ def display_comparison(comparison):
 
 def ajax_response(request, experiment_name):
     """Update a comparison with a response"""
-
+    user = request.user
     POST = request.POST
     comparison_id = POST.get("comparison_id")
+    domain = POST.get('domain') or request.GET.get('domain')
     debug = True
 
     comparison = Comparison.objects.get(pk=comparison_id)
@@ -89,9 +199,9 @@ def ajax_response(request, experiment_name):
     comparison.save()
 
     # If this comparison belongs to a sorting tree, run the tree logic...
-    _sorting_logic(experiment_name)
+    _sorting_logic(experiment_name, user,domain)
 
-    comparisons = list(_all_comparisons(experiment_name)[:1])
+    comparisons = list(_all_comparisons(experiment_name, domain=domain, user=user)[:1])
     for comparison in comparisons:
         display_comparison(comparison)
     if debug:
@@ -108,22 +218,25 @@ def show_comparison(request, comparison_id):
     return render(request, 'show_feedback.html', context={"feedback": comparison})
 
 def respond(request, experiment_name):
-    # This only does things if the experiment uses a sorting tree.
-    _sorting_logic(experiment_name)
+    user = request.user
+    # Extract the domain from the request (assuming it's sent as a POST or GET parameter)
+    domain = request.POST.get('domain') or request.GET.get('domain')
 
-    # The response interface queues up some comparisons and handles the logic of serving up
-    # new ones to that queue via AJAX, so the user doesn't have to refresh or wait between
-    # labeling comparisons.
+    _sorting_logic(experiment_name, user, domain)
 
+    # Fetch comparisons only for the current experiment, domain, and user
     number_of_queued_comparisons = 3
-    comparisons = list(_all_comparisons(experiment_name)[:number_of_queued_comparisons])
+    comparisons = list(_all_comparisons(experiment_name, domain=domain, user=user)[:number_of_queued_comparisons])
+
     for comparison in comparisons:
         display_comparison(comparison)
 
     return render(request, 'responses.html', context={
         'comparisons': comparisons,
-        'experiment': _build_experiment_resource(experiment_name)
+        'experiment': _build_experiment_resource(experiment_name),
+        'domain': domain
     })
+
 
 def all_clips(request, environment_id):
     return render(request, 'all_clips.html', context={"clips": Clip.objects.filter(environment_id=environment_id)})
@@ -157,10 +270,13 @@ def _handle_comparison_on_node(comp, node, experiment_name):
                     break
                 check_node = check_node.parent
             if need_new_node:
+                print("\tsince new node is needed. CREATING IT!!!!")
                 new_node = SortTree(
                     experiment_name=node.experiment_name,
                     is_red=True,
                     parent=node,
+                    user=node.user,
+                    domain=node.domain
                 )
                 new_node.save()
                 new_node.bound_clips.add(clip)
@@ -171,13 +287,15 @@ def _handle_comparison_on_node(comp, node, experiment_name):
                 else:
                     node.right = new_node
                 node.save()
+                print("REBALANCE!!!!")
                 redblack.rebalance_tree(new_node)
+                print("REBALANCED!!!!")
     else:  # Assume tie
         node.bound_clips.add(clip)
         print(clip, 'being assigned to', node)
 
 def _handle_node_with_pending_clips(node, experiment_name):
-    comparisons_to_handle = Comparison.objects.filter(tree_node=node, relevant_to_pending_clip=True).exclude(response=None)
+    comparisons_to_handle = Comparison.objects.filter(tree_node=node, relevant_to_pending_clip=True, response__isnull=False)
     if comparisons_to_handle:
         print(node, "has comparisons to handle!")
         _handle_comparison_on_node(comparisons_to_handle[0], node, experiment_name)
@@ -196,6 +314,7 @@ def _handle_node_with_pending_clips(node, experiment_name):
             priority=0.1 if node.parent is None else 1.0,  # De-prioritize comparisons on the root
             tree_node=node,
             relevant_to_pending_clip=True,
+            user_id=node.user.id,
         )
         print(comparison, "created!")
         comparison.full_clean()
@@ -204,14 +323,15 @@ def _handle_node_with_pending_clips(node, experiment_name):
     #   We're waiting for the user to label the comparison for this node
     return False
 
-def _sorting_logic(experiment_name):
-    print("Sorting logic start for ", experiment_name)
+def _sorting_logic(experiment_name, user, domain):
+    print("Sorting logic start for ", experiment_name, " - Domain: ", domain, ", user")
     run_logic = True
     while run_logic:
         print("Logic loop")
         run_logic = False
         # Look to generate comparisons from the tree
-        active_tree_nodes = SortTree.objects.filter(experiment_name=experiment_name).exclude(pending_clips=None)
+        active_tree_nodes = SortTree.objects.filter(experiment_name=experiment_name, domain=domain, user_id=user, pending_clips__isnull=False)
+        print("active_tree_nodes:::",active_tree_nodes)
         for node in active_tree_nodes:
             print("Logic for", node)
             tree_changed = _handle_node_with_pending_clips(node, experiment_name)
@@ -272,7 +392,124 @@ def _set_visnode_position_data(visnodes, max_depth, clip_width):
     return total_width, total_height
 
 def tree(request, experiment_name):
-    root = SortTree.objects.get(experiment_name=experiment_name, parent=None)
+    user = request.user
+    domain = request.POST.get('domain') or request.GET.get('domain')
+    root = SortTree.objects.get(experiment_name=experiment_name, user=user, domain=domain, parent=None)
+    # root = SortTree.objects.get(experiment_name=experiment_name, parent=None, domain=domain, user=user)
+
     visnodes, max_depth = _get_visnodes(root, depth=0, tree_position=1, what_kind_of_child_i_am=None)
     dim = _set_visnode_position_data(visnodes, max_depth, 84)
     return render(request, 'tree.html', context={"tree": visnodes, "total": {"width": dim[0], "height": dim[1]}})
+
+def user_register(request):
+    if request.method == 'POST':
+        form = CustomUserCreationForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            login(request, user)
+            # Create a SortTree instance for the new user
+            SortTree.objects.create(experiment_name=f"Tree for {user.username}", user=user)
+            return redirect('index')
+    else:
+        form = CustomUserCreationForm()
+    return render(request, 'register.html', {'form': form})
+
+
+@api_view(['POST'])
+def register(request):
+    print("REGISTER FROM API!!")
+    print("request.POST:: ", request.data)
+
+    form = CustomUserCreationForm(request.data)
+    print(form)
+    
+    if form.is_valid():
+        user = form.save()
+        token, _ = Token.objects.get_or_create(user=user)
+        login(request, user)
+        return Response({'token': token.key}, status=status.HTTP_201_CREATED)
+    else:
+        print(form.errors)
+        return Response({'error': form.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+# @api_view(['POST'])
+# def register(request):
+#     print("REGISTER FROM API!!")
+#     print("request.POST:: ", request.data)
+
+#     form = CustomUserCreationForm(request.data)
+#     print(form)
+    
+#     if form.is_valid():
+#         user = form.save()
+#         token, _ = Token.objects.get_or_create(user=user)
+#         login(request, user)
+#         SortTree.objects.create(experiment_name=f"Tree for {user.username}, sports domain", domain="sports", user=user)
+#         SortTree.objects.create(experiment_name=f"Tree for {user.username}, courses domain", domain="courses", user=user)
+
+#         return Response({'token': token.key}, status=status.HTTP_201_CREATED)
+#     else:
+#         print(form.errors)
+#         return Response({'error': form.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+def login_user(request):
+    username = request.data.get('username')
+    password = request.data.get('password')
+    user = authenticate(username=username, password=password)
+    try:   
+        login(request, user)
+        print("user: ", user, " - logged in.")
+    except:
+        print("LOGIN FAILED")
+    print(user)
+    if user is not None:
+        token, _ = Token.objects.get_or_create(user=user)
+        return Response({'token': token.key}, status=status.HTTP_200_OK)
+    return Response({'error': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+def logout_user(request):
+    request.user.auth_token.delete()
+    logout(request)
+    return Response(status=status.HTTP_200_OK)
+
+
+@csrf_exempt
+def log_training_completion(request):
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body) 
+            
+            user_id = data.get("user_id")
+            domain = data.get("domain")
+            experiment = data.get("experiment")
+            environment = data.get("environment")
+
+            if not all([user_id, domain, experiment, environment]):
+                return JsonResponse({"error": "Missing required fields"}, status=400)
+
+            user = User.objects.get(id=user_id)  # Get user object
+            
+            # Create or get the training completion record
+            training_completion, created = TrainingCompletion.objects.get_or_create(
+                user=user,
+                domain=domain,
+                experiment=experiment,
+                environment=environment
+            )
+
+            return JsonResponse({
+                "message": "Training completion recorded" if created else "Training completion already exists",
+                "created": created
+            }, status=201 if created else 200)
+
+        except User.DoesNotExist:
+            return JsonResponse({"error": "User not found"}, status=404)
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+    
+    return JsonResponse({"error": "Invalid request method"}, status=405)
+

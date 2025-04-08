@@ -24,6 +24,7 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import queue
 from threading import Thread
 
 import numpy as np
@@ -41,13 +42,25 @@ class ThreadPredictor(Thread):
         self.exit_flag = False
 
     def run(self):
-        ids = np.zeros(Config.PREDICTION_BATCH_SIZE, dtype=np.uint16)
-        states = np.zeros(
-            (Config.PREDICTION_BATCH_SIZE, Config.IMAGE_HEIGHT, Config.IMAGE_WIDTH, Config.STACKED_FRAMES),
-            dtype=np.float32)
+        if "uiadapt" in Config.ATARI_GAME.lower():
+            ids = np.zeros(Config.PREDICTION_BATCH_SIZE, dtype=np.uint16)
+            states = np.zeros(
+                (Config.PREDICTION_BATCH_SIZE, 8, Config.STACKED_FRAMES),
+                dtype=np.float32)
+            
+        else:
+            ids = np.zeros(Config.PREDICTION_BATCH_SIZE, dtype=np.uint16)
+            states = np.zeros(
+                (Config.PREDICTION_BATCH_SIZE, Config.IMAGE_HEIGHT, Config.IMAGE_WIDTH, Config.STACKED_FRAMES),
+                dtype=np.float32)
 
         while not self.exit_flag:
-            ids[0], states[0] = self.server.prediction_q.get()
+            try:
+                # print("self.server.prediction_q::: ", self.server.prediction_q)
+                ids[0], states[0] = self.server.prediction_q.get(timeout=1)
+            except queue.Empty:
+                # print("queue is empty. continue.")
+                continue  
 
             size = 1
             while size < Config.PREDICTION_BATCH_SIZE and not self.server.prediction_q.empty():

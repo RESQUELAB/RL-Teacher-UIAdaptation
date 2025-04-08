@@ -39,8 +39,8 @@ else:
 
 
 class Environment:
-    def __init__(self):
-        self.game = GameManager(Config.ATARI_GAME, Config.MAKE_ENV_FUNCTION, display=Config.PLAY_MODE)
+    def __init__(self, env=None):
+        self.game = GameManager(Config.ATARI_GAME, Config.MAKE_ENV_FUNCTION, display=Config.PLAY_MODE, env=env)
         self.atari = self.game.is_atari()
         self.nb_frames = Config.STACKED_FRAMES
         self.frame_q = Queue(maxsize=self.nb_frames)
@@ -65,6 +65,9 @@ class Environment:
         if not self.frame_q.full():
             return None  # frame queue is not full yet.
         x_ = np.array(self.frame_q.queue)
+        if self.game.is_uiadapt():
+            x_ = np.transpose(x_)
+            return x_
         x_ = np.transpose(x_, [1, 2, 0])  # move channels
         return x_
 

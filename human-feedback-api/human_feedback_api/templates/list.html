@@ -12,6 +12,7 @@
             <th> comparison_id</th>
             <th> created_at</th>
             <th> responded_at</th>
+            <th> responded_by</th>
             <th> priority</th>
             <th> response</th>
         </tr>
@@ -22,6 +23,7 @@
                 <td><a href="/comparisons/{{ comparison.id }}">{{ comparison.id }}</a></td>
                 <td>{{ comparison.created_at }}</td>
                 <td>{{ comparison.responded_at }}</td>
+                <td>{{ comparison.user }}</td>
                 <td>{{ comparison.priority }}</td>
                 <td>{{ comparison.response }}</td>
             </tr>

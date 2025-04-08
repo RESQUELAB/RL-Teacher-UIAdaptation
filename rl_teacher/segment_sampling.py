@@ -14,11 +14,13 @@ def _slice_path(path, segment_length, start_pos=0):
 def sample_segment_from_path(path, segment_length):
     """Returns a segment sampled from a random place in a path. Returns None if the path is too short"""
     path_length = len(path["obs"])
+    # print("\t path_length", path_length )
+    # print("\t path_length", segment_length )
     if path_length < segment_length:
         return None
 
     start_pos = np.random.randint(0, path_length - segment_length + 1)
-
+    print("\tstart_pos: ", start_pos, " ")
     # Build segment
     segment = _slice_path(path, segment_length, start_pos)
 
@@ -61,6 +63,15 @@ def do_rollout(env, action_function, stacked_frames):
     obs, rewards, actions, human_obs = [], [], [], []
     max_timesteps_per_episode = get_timesteps_per_episode(env)
     ob = env.reset()
+
+    action = null_action(env, ob)
+    ob, rew, done, info = env.step(action)
+    for i in range(30):
+        obs.append(ob)
+        actions.append(action)
+        rewards.append(rew)
+        human_obs.append(info.get("human_obs"))
+
     # Primary environment loop
     for i in range(max_timesteps_per_episode):
         action = action_function(env, ob)
@@ -71,17 +82,27 @@ def do_rollout(env, action_function, stacked_frames):
         human_obs.append(info.get("human_obs"))
         if done:
             break
+    
+    action = null_action(env, ob)
+    ob, rew, done, info = env.step(action)
+    for i in range(20):
+        obs.append(ob)
+        actions.append(action)
+        rewards.append(rew)
+        human_obs.append(info.get("human_obs"))
+    
     # Build path dictionary
     path = {
         "obs": stack_frames(obs, stacked_frames),
         "original_rewards": np.array(rewards),
         "actions": np.array(actions),
-        "human_obs": np.array(human_obs)}
+        "human_obs": np.array(human_obs),
+        "type": env.name}
     return path
 
-def basic_segment_from_null_action(env_id, make_env, clip_length_in_seconds, stacked_frames):
+def basic_segment_from_null_action(env_id, make_env, clip_length_in_seconds, stacked_frames, env=None):
     """ Returns a segment from the start of a path made from doing nothing. """
-    env = make_env(env_id)
+    env = make_env(env_id, env=env)
     segment_length = int(clip_length_in_seconds * env.fps)
     path = do_rollout(env, null_action, stacked_frames)
     return _slice_path(path, segment_length)
@@ -89,14 +110,19 @@ def basic_segment_from_null_action(env_id, make_env, clip_length_in_seconds, sta
 def basic_segments_from_rand_rollout(
     env_id, make_env, n_desired_segments, clip_length_in_seconds, stacked_frames,
     # These are only for use with multiprocessing
-    seed=0, _verbose=True, _multiplier=1
+    seed=0, _verbose=True, _multiplier=1, env=None
 ):
     """ Generate a list of path segments by doing random rollouts. No multiprocessing. """
     segments = []
-    env = make_env(env_id)
+    env = make_env(env_id, env=env)
     env.seed(seed)
     space_prng.seed(seed)
+    print("@@@@@@@@@@@@@@@@@@@@@@22")
+    print("clip_length_in_seconds:: ", clip_length_in_seconds)
     segment_length = int(clip_length_in_seconds * env.fps)
+    print("segment_length:: ", segment_length)
+    print("FPS:: ", env.fps)
+    print("@@@@@@@@@@@@@@@@@@@@@@22")
     while len(segments) < n_desired_segments:
         path = do_rollout(env, random_action, stacked_frames)
         # Calculate the number of segments to sample from the path
@@ -114,10 +140,11 @@ def basic_segments_from_rand_rollout(
         print("Successfully collected %s segments" % (len(segments) * _multiplier))
     return segments
 
-def segments_from_rand_rollout(env_id, make_env, n_desired_segments, clip_length_in_seconds, stacked_frames, workers):
+def segments_from_rand_rollout(env_id, make_env, n_desired_segments, clip_length_in_seconds, stacked_frames, workers, env=None):
     """ Generate a list of path segments by doing random rollouts. Can use multiple processes. """
+    print("WE HAVE ", workers, " workers.")
     if workers < 2:  # Default to basic segment collection
-        return basic_segments_from_rand_rollout(env_id, make_env, n_desired_segments, clip_length_in_seconds, stacked_frames)
+        return basic_segments_from_rand_rollout(env_id, make_env, n_desired_segments, clip_length_in_seconds, stacked_frames, env=env)
 
     pool = Pool(processes=workers)
     segments_per_worker = int(math.ceil(n_desired_segments / workers))

@@ -29,6 +29,7 @@ import numpy as np
 
 from ga3c.Config import Config
 
+from queue import Empty
 
 class ThreadTrainer(Thread):
     def __init__(self, server, id):
@@ -42,8 +43,17 @@ class ThreadTrainer(Thread):
     def run(self):
         while not self.exit_flag:
             batch_size = 0
-            while batch_size <= Config.TRAINING_MIN_BATCH_SIZE:
-                x_, r_, a_ = self.server.training_q.get()
+            x__, r__, a__ = None, None, None
+            while batch_size <= Config.TRAINING_MIN_BATCH_SIZE and not self.exit_flag:
+                try:
+                    x_, r_, a_ = self.server.training_q.get(timeout=5)
+                except Empty:
+                    # If no data is received and exit_flag is True, break the loop
+                    if self.exit_flag:
+                        break
+                    continue  # Continue waiting if exit_flag is still False
+
+                # Concatenate batches
                 if batch_size == 0:
                     x__ = x_
                     r__ = r_
@@ -54,5 +64,6 @@ class ThreadTrainer(Thread):
                     a__ = np.concatenate((a__, a_))
                 batch_size += x_.shape[0]
 
-            if Config.TRAIN_MODELS:
+            # Train the model if training is enabled and we have accumulated data
+            if Config.TRAIN_MODELS and batch_size > 0:
                 self.server.train_model(x__, r__, a__, self.id)

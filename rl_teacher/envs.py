@@ -6,7 +6,15 @@ import numpy as np
 import scipy.misc as misc
 from gym.wrappers.time_limit import TimeLimit
 
-def make_env(env_id):
+from PIL import Image
+import json
+import numpy as np
+
+import threading
+import base64
+import io
+
+def make_env(env_id, env=None):
     original_name = env_id
     short = False
     if '-v' in env_id:
@@ -15,12 +23,10 @@ def make_env(env_id):
         env_id = env_id[len('short'):]
         short = True
     # Use our task_by_name function to get the env
-    return task_by_name(env_id, original_name, short)
+    return task_by_name(env_id, original_name, short, env=env)
 
-def task_by_name(name, original_name=None, short=False):
-    if name == "reacher":
-        return reacher(short=short)
-    elif name == "humanoid":
+def task_by_name(name, original_name=None, short=False, env=None):
+    if name == "humanoid":
         return humanoid()
     elif name == "hopper":
         return hopper(short=short)
@@ -36,12 +42,15 @@ def task_by_name(name, original_name=None, short=False):
         return pendulum()
     elif name in ["doublependulum"]:
         return double_pendulum()
+    elif name == "uiadaptation":
+        return ui_adapt_env(original_name, env=env)
     else:
         try:
             # If an original_name is provided, try to make an environment from that.
             # See "make_env"
             env = gym.make(original_name)
-
+            env.name = name
+            
             if name == "montezumarevenge":
                 nav_to_start_commands = [
                     # Basic start:
@@ -58,7 +67,7 @@ def task_by_name(name, original_name=None, short=False):
             env = limit(t=500, env=env)
             return env
         except Exception:
-            raise ValueError(name)
+            raise ValueError(name, original_name)
 
 class TransparentWrapper(gym.Wrapper):
     """Passes missing attributes through the wrapper stack"""
@@ -107,6 +116,63 @@ class MjViewer(TransparentWrapper):
         ob, reward, done, info = self.env.step(a)
         info["human_obs"] = human_obs
         return ob, reward, done, info
+
+def is_base64_image(image_data):
+    # Check if the data URI scheme starts with 'data:image/'
+    if image_data.startswith('data:image/'):
+        # Extract the MIME type
+        mime_type = image_data.split(';')[0][len('data:image/'):]
+        # Check if it's base64-encoded
+        if ';base64,' in image_data:
+            return True, mime_type
+    return False, None
+
+class TextEnvViewer(TransparentWrapper):
+    """Saves the raw human_obs to info that allows rendering videos subsequently"""
+
+    def __init__(self, env, flip=False, fps=40):
+        self.fps = fps
+        self.flip = flip
+        super().__init__(env)
+
+    def render_full_obs(self, full_obs):
+        return full_obs  # Don't need to do anything because we already have the source pixels!
+
+    def _step(self, a):
+        # print(threading.currentThread().getName(), ' GONNA MAKE A STEP.')
+        ob, reward, done, info = self.env.step(a)
+        # print(threading.currentThread().getName(), ' STEP COMPLETED!.')
+        
+        if "human_obs" not in info:
+            if self.flip:
+                human_obs = np.flip(ob, axis=0)
+            else:
+                human_obs = ob
+            info["human_obs"] = human_obs
+        elif "human_obs" in info and self.flip:
+            image_data = info["human_obs"]
+            is_base64, mime_type = is_base64_image(image_data)
+            if is_base64:
+                # print(f"The image is base64-encoded and its MIME type is {mime_type}.")
+                new_image = Image.open(io.BytesIO(base64.b64decode(image_data.split(',')[1])))
+                new_image.save("image.png")
+            else:
+                # print("The image is not base64-encoded.")
+                # Convert the NumPy array to a PIL Image object
+                new_image = Image.fromarray(np.array(json.loads(image_data["image"]), dtype='uint8'))
+            
+            new_image = np.flip(new_image, 0)
+            info["human_obs"] = new_image
+        return ob, reward, done, info
+
+class CompressedTextViewer(TransparentWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+
+    def _step(self, a):
+        ob, reward, done, info = self.env.step(a)
+        return ob, reward, done, info
+
 
 class PixelEnvViewer(TransparentWrapper):
     """Saves the raw human_obs to info that allows rendering videos subsequently"""
@@ -302,4 +368,21 @@ def walker(short=False):
     env = MjViewer(env, fps=30)
     env = NeverDone(env, bonus)
     env = limit(env, 300 if short else 1000)
+    return env
+
+def ui_adapt_env(original_name, env=None):
+    import time
+    import ui_adapt  # Import here to avoid forcing the user to have UIAdaptationEnv to run Teacher
+    if not env:
+        from ga3c.Config import Config as Ga3cConfig
+        if (Ga3cConfig.ENV is not None):
+            return Ga3cConfig.ENV
+        else:
+            print("\n\t@@@@@ CREATING AN ORIGINAL ENV WITH GYM MAKE @@@@@")
+            env = gym.make(original_name)
+    if isinstance(env, TimeLimitTransparent):
+        return env
+    env = CompressedTextViewer(env)
+    env = TextEnvViewer(env, flip=True, fps=12)
+    env = limit(t=5, env=env)
     return env

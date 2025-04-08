@@ -33,7 +33,7 @@ from ga3c.Config import Config
 
 
 class NetworkVP:
-    def __init__(self, device, model_name, num_actions):
+    def __init__(self, device, model_name, num_actions, user=None,domain=None):
         self.device = device
         self.model_name = model_name
         self.num_actions = num_actions
@@ -45,6 +45,9 @@ class NetworkVP:
         self.learning_rate = Config.LEARNING_RATE_START
         self.beta = Config.BETA_START
         self.log_epsilon = Config.LOG_EPSILON
+
+        self.user = user
+        self.domain = domain
 
         self.graph = tf.Graph()
         with self.graph.as_default() as g:
@@ -69,8 +72,15 @@ class NetworkVP:
                     self.saver = tf.train.Saver({var.name: var for var in vars}, max_to_keep=0)
 
     def _create_graph(self):
-        self.x = tf.placeholder(
-            tf.float32, [None, self.img_height, self.img_width, self.img_channels], name='X')
+        if "uiadapt" in Config.ATARI_GAME.lower():
+            # self.x = tf.placeholder(
+            #     tf.float32, [None, 11, self.img_channels], name='X')
+            self.x = tf.placeholder(
+                tf.float32, [None, 8, self.img_channels], name='X')
+            
+        else:
+            self.x = tf.placeholder(
+                tf.float32, [None, self.img_height, self.img_width, self.img_channels], name='X')
         self.y_r = tf.placeholder(tf.float32, [None], name='Yr')
 
         self.var_beta = tf.placeholder(tf.float32, name='beta', shape=[])
@@ -79,13 +89,21 @@ class NetworkVP:
         self.global_step = tf.Variable(0, trainable=False, name='step')
 
         # As implemented in A3C paper
-        self.n1 = self.conv2d_layer(self.x, 8, 16, 'conv11', strides=[1, 4, 4, 1])
-        self.n2 = self.conv2d_layer(self.n1, 4, 32, 'conv12', strides=[1, 2, 2, 1])
+        if "uiadapt" in Config.ATARI_GAME.lower():
+            self.n1 = self.conv1d_layer(self.x, 8, 16, 'conv11', strides=1)
+            self.n2 = self.conv1d_layer(self.n1, 4, 32, 'conv12', strides=1)
+        else:
+            self.n1 = self.conv2d_layer(self.x, 8, 16, 'conv11', strides=[1, 4, 4, 1])
+            self.n2 = self.conv2d_layer(self.n1, 4, 32, 'conv12', strides=[1, 2, 2, 1])
         self.action_index = tf.placeholder(tf.float32, [None, self.num_actions])
         _input = self.n2
 
         flatten_input_shape = _input.get_shape()
-        nb_elements = flatten_input_shape[1] * flatten_input_shape[2] * flatten_input_shape[3]
+        print("FLATTEN INPUT SHAPE:::: ", flatten_input_shape   )
+        if "uiadapt" in Config.ATARI_GAME.lower():
+            nb_elements = flatten_input_shape[1] * flatten_input_shape[2]
+        else:
+            nb_elements = flatten_input_shape[1] * flatten_input_shape[2] * flatten_input_shape[3]
 
         self.flat = tf.reshape(_input, shape=[-1, nb_elements._value])
         self.d1 = self.dense_layer(self.flat, 256, 'dense1')
@@ -215,6 +233,25 @@ class NetworkVP:
                 output = func(output)
 
         return output
+    
+    def conv1d_layer(self, input, filter_size, out_dim, name, strides, func=tf.nn.relu):
+        in_dim = input.get_shape().as_list()[-1]
+        d = 1.0 / np.sqrt(filter_size * in_dim)
+        with tf.variable_scope(name):
+            w_init = tf.random_uniform_initializer(-d, d)
+            b_init = tf.random_uniform_initializer(-d, d)
+            w = tf.get_variable('w',
+                                shape=[filter_size, in_dim, out_dim],
+                                dtype=tf.float32,
+                                initializer=w_init)
+            b = tf.get_variable('b', shape=[out_dim], initializer=b_init)
+
+            output = tf.nn.conv1d(input, w, stride=strides, padding='SAME') + b
+            if func is not None:
+                output = func(output)
+
+        return output
+
 
     def __get_base_feed_dict(self):
         return {self.var_beta: self.beta, self.var_learning_rate: self.learning_rate}
@@ -248,15 +285,37 @@ class NetworkVP:
         step, summary = self.sess.run([self.global_step, self.summary_op], feed_dict=feed_dict)
         self.log_writer.add_summary(summary, step)
 
+
+
     def _checkpoint_filename(self, episode):
-        return 'checkpoints/%s/%08d' % (self.model_name, episode)
+        # Start with the base path
+        base_path = 'checkpoints/agent/%s' % self.model_name
+        
+        if self.user:
+            base_path += '/%s' % self.user
+        
+        if self.domain:
+            base_path += '/%s' % self.domain
+
+        if not self.domain or not self.user:
+            base_path += '/default'
+            
+        return base_path + '/%08d' % (episode)
+
+    # def _checkpoint_filename(self, episode):
+    #     return 'checkpoints/agent/%s/%08d' % (self.model_name, episode)
 
     def _get_episode_from_filename(self, filename):
         # TODO: hacky way of getting the episode. ideally episode should be stored as a TF variable
+        filename = filename.replace("\\", "/")
+        print("this is the filename::: ", filename)
         return int(re.split('/|_|\.', filename)[-1])
 
     def save(self, episode):
-        self.saver.save(self.sess, self._checkpoint_filename(episode))
+        checkpoint_path = self._checkpoint_filename(episode)
+        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+
+        self.saver.save(self.sess, checkpoint_path)
 
     def try_to_load(self):
         filename = tf.train.latest_checkpoint(os.path.dirname(self._checkpoint_filename(episode=0)))
@@ -265,10 +324,19 @@ class NetworkVP:
             return 0
         else:
             if Config.LOAD_EPISODE > 0:
-                filename = self._checkpoint_filename(Config.LOAD_EPISODE)
-            self.saver.restore(self.sess, filename)
-            print("GA3C model loaded from checkpoint")
-            return self._get_episode_from_filename(filename)
+                filename_checkpoint = self._checkpoint_filename(Config.LOAD_EPISODE)
+                try:
+                    self.saver.restore(self.sess, filename_checkpoint)
+                    print("GA3C model loaded from checkpoint")
+                    return self._get_episode_from_filename(filename_checkpoint)
+                except ValueError:
+                    print(f"Checkpoint {filename_checkpoint} not found. Loading latest episode instead.")
+                    self.saver.restore(self.sess, filename)
+                    print("GA3C model loaded from checkpoint")
+                    return self._get_episode_from_filename(filename)
+            else:
+                self.saver.restore(self.sess, filename)
+                return self._get_episode_from_filename(filename)
 
     def get_variables_names(self):
         return [var.name for var in self.graph.get_collection('trainable_variables')]

@@ -44,7 +44,8 @@ class Config:
     # Load old models. Throws if the model doesn't exist
     LOAD_CHECKPOINT = False
     # If 0, the latest checkpoint is loaded
-    LOAD_EPISODE = 0
+    LOAD_EPISODE = 9900
+    # LOAD_EPISODE = 7995
 
     #########################################################################
     # Number of agents, predictors, trainers and other system settings
@@ -58,7 +59,7 @@ class Config:
     TRAINERS = 2
 
     # Device
-    DEVICE = 'gpu:0'
+    DEVICE = '/gpu:0'
 
     # Enable the dynamic adjustment (+ waiting time to start it)
     DYNAMIC_SETTINGS = True
@@ -128,7 +129,7 @@ class Config:
     # Enable to save models every SAVE_FREQUENCY episodes
     SAVE_MODELS = True
     # Save every SAVE_FREQUENCY episodes
-    SAVE_FREQUENCY = 1000
+    SAVE_FREQUENCY = 100
 
     # Print stats every PRINT_STATS_FREQUENCY episodes
     PRINT_STATS_FREQUENCY = 1
@@ -147,3 +148,6 @@ class Config:
     MIN_POLICY = 0.0
     # Use log_softmax() instead of log(softmax())
     USE_LOG_SOFTMAX = False
+
+    # The environment if there is alredy one created, there's not need to create it again
+    ENV = None

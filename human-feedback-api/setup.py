@@ -8,5 +8,6 @@ setup(name='human_feedback_api',
         'gunicorn',
         'whitenoise',
         'ipython',
+        'psycopg2-binary==2.8.6',
     ]
 )

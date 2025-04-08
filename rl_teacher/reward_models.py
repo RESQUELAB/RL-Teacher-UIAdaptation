@@ -64,25 +64,34 @@ class OriginalEnvironmentReward(RewardModel):
 class OrdinalRewardModel(RewardModel):
     """A learned model of an environmental reward using training data that is merely sorted."""
 
-    def __init__(self, model_type, env, env_id, make_env, experiment_name, episode_logger, label_schedule, n_pretrain_clips, clip_length, stacked_frames, workers):
+    def __init__(self, model_type, env, env_id, make_env, experiment_name, episode_logger,
+                 label_schedule, n_pretrain_clips, clip_length, stacked_frames, workers, 
+                 user_id= None, domain=None, training=False):
         # TODO It's pretty asinine to pass in env, env_id, and make_env. Cleanup!
         super().__init__(episode_logger)
 
         if model_type == "synth":
             self.clip_manager = SynthClipManager(env, experiment_name)
         elif model_type == "human":
-            self.clip_manager = ClipManager(env, env_id, experiment_name, workers)
+            print("THE TRAINING::: ", training)
+            self.clip_manager = ClipManager(env, env_id, experiment_name, workers, user_id=user_id, domain=domain, training=training)
         else:
             raise ValueError("Cannot find clip manager that matches keyword \"%s\"" % model_type)
 
         if self.clip_manager.total_number_of_clips > 0 and not self.clip_manager._sorted_clips:
             # If there are clips but no sort tree, create a sort tree!
+            print("If there are clips but no sort tree, create a sort tree!")
             self.clip_manager.create_new_sort_tree_from_existing_clips()
         if self.clip_manager.total_number_of_clips < n_pretrain_clips:
             # If there aren't enough clips, generate more!
-            self.generate_pretraining_data(env_id, make_env, n_pretrain_clips, clip_length, stacked_frames, workers)
+            print("# If there aren't enough clips, generate more!")
+            self.generate_pretraining_data(env_id, make_env, n_pretrain_clips, clip_length, stacked_frames, workers, env=env)
 
         self.clip_manager.sort_clips(wait_until_database_fully_sorted=True)
+
+        self.domain = domain
+        self.user = user_id
+        self.training = training
 
         self.label_schedule = label_schedule
         self.experiment_name = experiment_name
@@ -97,13 +106,20 @@ class OrdinalRewardModel(RewardModel):
 
         # Build and initialize our model
         config = tf.ConfigProto(
-            # device_count={'GPU': 0},
-            # log_device_placement=True,
+            device_count={'GPU': 0},
+            log_device_placement=True,
         )
         config.gpu_options.per_process_gpu_memory_fraction = 0.35  # allow_growth = True
         self.sess = tf.Session(config=config)
 
         self.obs_shape = env.observation_space.shape
+        # self.obs_shape = (env.observation_space_size,)
+        # self.obs_shape = env.observation_space_size
+
+        print("\n\n\n\nREWARD MODEL::env.observation_space::: ", env.observation_space)
+        print("REWARD MODEL::env.observation_space.shape::: ", env.observation_space.shape)
+        print("REWARD MODEL::env.observation_space_size::: ", env.observation_space_size)
+
         if stacked_frames > 0:
             self.obs_shape = self.obs_shape + (stacked_frames,)
         self.discrete_action_space = (len(env.action_space.shape) == 0)
@@ -118,7 +134,8 @@ class OrdinalRewardModel(RewardModel):
         """Our model takes in path segments with observations and actions, and generates rewards (Q-values)."""
         # Set up observation placeholder
         self.obs_placeholder = tf.placeholder(dtype=tf.float32, shape=(None, None) + self.obs_shape, name="obs_placeholder")
-
+        print("BUILDING MODEL obs_placeholder!!!!: ", self.obs_placeholder)
+        print("BUILDING MODEL obs_shape!!!!: ", self.obs_shape)
         # Set up action placeholder
         if self.discrete_action_space:
             self.act_placeholder = tf.placeholder(dtype=tf.float32, shape=(None, None), name="act_placeholder")
@@ -126,7 +143,14 @@ class OrdinalRewardModel(RewardModel):
             segment_act = tf.one_hot(tf.cast(self.act_placeholder, tf.int32), self.act_shape[0])
             # HACK Use a convolutional network for Atari
             # TODO Should check the input space dimensions, not the output space!
-            net = SimpleConvolveObservationQNet(self.obs_shape, self.act_shape)
+
+            if len(self.obs_shape) == 3:
+                print("using the SImple Convolve QNET:: ", self.obs_shape)
+                net = SimpleConvolveObservationQNet(self.obs_shape, self.act_shape)
+            else:
+                # Use original obs_shape for 1D vector
+                print("USING THE FULLY CONNECTED MLP:: ", self.obs_shape, " -- ", self.act_shape)
+                net = FullyConnectedMLP(self.obs_shape, self.act_shape)
         else:
             self.act_placeholder = tf.placeholder(dtype=tf.float32, shape=(None, None) + self.act_shape, name="act_placeholder")
             # Assume the actions are how we want them
@@ -177,24 +201,59 @@ class OrdinalRewardModel(RewardModel):
         if self._episode_count % self._episodes_per_checkpoint == 0:
             self.save_model_checkpoint()
 
-    def generate_pretraining_data(self, env_id, make_env, n_pretrain_clips, clip_length, stacked_frames, workers):
+    def generate_pretraining_data(self, env_id, make_env, n_pretrain_clips, clip_length, stacked_frames, workers, env=None):
         print("Starting random rollouts to generate pretraining segments. No learning will take place...")
         if self.clip_manager.total_number_of_clips == 0:
             # We need a valid clip for the root node of our search tree.
             # Null actions are more likely to generate a valid clip than a random clip from random actions.
-            first_clip = basic_segment_from_null_action(env_id, make_env, clip_length, stacked_frames)
+            print("Creating first clip")
+            first_clip = basic_segment_from_null_action(env_id, make_env, clip_length, stacked_frames, env=env)
+            print("first clip created: ", first_clip)
             # Add the null-action clip first, so the root is valid.
             self.clip_manager.add(first_clip, source="null-action", sync=True)  # Make synchronous to ensure this is the first clip.
             # Now add the rest
 
         desired_clips = n_pretrain_clips - self.clip_manager.total_number_of_clips
+        print("WE WANT: ", desired_clips, " clips.")
 
         random_clips = segments_from_rand_rollout(
             env_id, make_env, n_desired_segments=desired_clips,
-            clip_length_in_seconds=clip_length, stacked_frames=stacked_frames, workers=workers)
-
+            clip_length_in_seconds=clip_length, stacked_frames=stacked_frames, workers=workers,
+            env=env)
+        print("FINISHED RANDOM CIPS!")
         for clip in random_clips:
-            self.clip_manager.add(clip, source="random rollout")
+            action_string = None
+            print("\n\n@@@@@\n")
+            print("eenv_id: ", env_id)
+            print("env_id.lower().startswith(\"uiadaptation\"): ", env_id.lower().startswith("uiadaptation"))
+            print("env", env)
+            if env_id.lower().startswith("uiadaptation") and env is not None:
+                action_string = self.get_actions_from_id(env, clip["actions"])
+            print("These are the actions:" , action_string)
+
+            # self.clip_manager.add(clip, source="random rollout")
+            self.clip_manager.add(clip, source="random rollout", actions=action_string)
+    
+    def get_actions_from_id(self, env, actions):
+        # Access the actions dictionary from the environment's config
+        action_dict = env.config.actions
+
+        # Initialize a list to store the unique action names (or api_calls if you prefer)
+        unique_actions = []
+        
+        # Iterate over the action IDs and get the corresponding action name or api_call
+        for action_id in actions:
+            print("\tget_actions_from_id - action_id:", action_id)
+            action_str = action_dict.get(str(action_id), {}).get("name", "Unknown Action")  # Use "name" or "api_call" as needed
+            print("\tget_actions_from_id - action_str: ", action_str)
+            
+            # Add the action to unique_actions only if it hasn't been added already
+            if action_str not in unique_actions:
+                unique_actions.append(action_str)
+
+        # Return a string of the non-repeated actions
+        return " -> ".join(unique_actions)
+
 
     def calculate_targets(self, ordinals):
         """ Project ordinal information into a cardinal value to use as a reward target """
@@ -215,6 +274,9 @@ class OrdinalRewardModel(RewardModel):
 
         with self.graph.as_default():
             for i in range(1, iterations + 1):
+                # print("obs_shape: ", self.obs_shape)
+                # print("type(obs): ", type(obs))
+                # print("len(obs): ", len(obs))
                 _, loss = self.sess.run([self.train_op, self.loss], feed_dict={
                     self.obs_placeholder: np.asarray(obs),
                     self.act_placeholder: np.asarray(acts),
@@ -228,10 +290,32 @@ class OrdinalRewardModel(RewardModel):
                     print("Reward model training iter %s (Err: %s)" % (self._elapsed_training_iters, loss))
 
     def _checkpoint_filename(self):
-        return 'checkpoints/reward_model/%s/treesave' % (self.experiment_name)
+        # Start with the base path
+        base_path = 'checkpoints/reward_model/%s' % self.experiment_name
+        
+        if self.user:
+            base_path += '/%s' % self.user
+        
+        if self.domain:
+            base_path += '/%s' % self.domain
+
+        if not self.domain or not self.user:
+            base_path += '/default'
+            
+        return base_path + '/treesave'
+
+
+    # def _checkpoint_filename(self):
+    #     return 'checkpoints/reward_model/%s/%s/%s/treesave' % (self.experiment_name, self.domain, self.user)
 
     def save_model_checkpoint(self):
         print("Saving reward model checkpoint!")
+        checkpoint_dir = os.path.dirname(self._checkpoint_filename())
+        
+        # Create the directory if it doesn't exist
+        if not os.path.exists(checkpoint_dir):
+            os.makedirs(checkpoint_dir)
+
         self.saver.save(self.sess, self._checkpoint_filename())
 
     def try_to_load_model_from_checkpoint(self):
@@ -240,9 +324,9 @@ class OrdinalRewardModel(RewardModel):
             print('No reward model checkpoint found on disk for experiment "{}"'.format(self.experiment_name))
         else:
             self.saver.restore(self.sess, filename)
-            print("Reward model loaded from checkpoint!")
+            print("Reward model loaded from checkpoint (domain: {})!".format(self.domain))
             # Dump model outputs with errors
-            if True:  # <-- Toggle testing with this
+            if self.training:  # <-- Toggle testing with this
                 with self.graph.as_default():
                     clip_ids, clips, ordinals = self.clip_manager.get_sorted_clips()
                     targets = self.calculate_targets(ordinals)
@@ -256,5 +340,5 @@ class OrdinalRewardModel(RewardModel):
                         starting_reward = predicted_rewards[0]
                         ending_reward = predicted_rewards[-1]
                         print(
-                            "Clip {: 3d}: predicted = {: 5.2f} | target = {: 5.2f} | error = {: 5.2f}"  # | start = {: 5.2f} | end = {: 5.2f}"
-                            .format(clip_ids[i], reward_sum, targets[i], reward_sum - targets[i]))  # , starting_reward, ending_reward))
+                            "Clip {: 3d} (domain: {}): predicted = {: 5.2f} | target = {: 5.2f} | error = {: 5.2f}"  # | start = {: 5.2f} | end = {: 5.2f}"
+                            .format(clip_ids[i], self.domain, reward_sum, targets[i], reward_sum - targets[i]))  # , starting_reward, ending_reward))

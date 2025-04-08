@@ -109,3 +109,9 @@ ENV/
 
 # MacOS
 .DS_Store
+
+
+/tmp/*
+*.mp4
+*.clip
+*.png 

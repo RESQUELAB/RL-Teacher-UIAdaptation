@@ -3,46 +3,48 @@
 
 {% block content %}
 
-    <div class="jumbotron text-center" style="margin-top: 20px">
-        <a href="/" class="lang-logo">
-            <img src="{% static 'lang-logo.png' %}">
-        </a>
-        <h1>RL Teacher</h1>
-        <p>Live training of AI agents</p>
-    </div>
+<div class="jumbotron text-center" style="margin-top: 20px">
+    <h2>Welcome, {{ username }}!</h2>
+    <a href="/" class="lang-logo">
+        <img src="{% static 'lang-logo.png' %}">
+    </a>
+    <h1>RL Teacher</h1>
+    <p>Live training of AI agents</p>
+</div>
 
-    <div>
-        <hr>
-        <div class="row">
-            <div class="col-md-6">
-                <h3><span class="glyphicon glyphicon-info-sign"></span> How this works</h3>
-                <ul>
-                    <li>You will see a task description and two videos of agents attempting to perform that task
+<div>
+    <hr>
+    <div class="row">
+        <div class="col-md-6">
+            <h3><span class="glyphicon glyphicon-info-sign"></span> How this works</h3>
+            <ul>
+                <li>You will see different User Interface adaptations across various domains.</li>
+                <li>Explore the options and decide which adaptation you prefer.</li>
+                <li>Click the button corresponding to your choice.</li>
+            </ul>
+        </div>
+        <div class="col-md-6">
+            <h3><span class="glyphicon glyphicon-link"></span> Experiments</h3>
+            <ul>
+                {% if binary_tree_experiments or other_experiments %}
+                    {% for experiment_name, domain in binary_tree_experiments %}
+                    <li>
+                        <a href="/experiments/{{ experiment_name }}?domain={{ domain }}">{{ experiment_name }}
+                            (Domain: {{ domain }})</a>
+                        (<a href="/tree/{{ experiment_name }}?domain={{ domain }}">tree</a>)
                     </li>
-
-                    <li>Decide which robot is coming closest to performing that task well
+                    {% endfor %}
+                    {% for experiment_name, domain in other_experiments %}
+                    <li>
+                        <a href="/experiments/{{ experiment_name }}">/experiments/{{ experiment_name }}
+                            (Domain: {{ domain }})</a>
                     </li>
-
-                    <li>Press the appropriate button
-                    </li>
+                    {% endfor %}
+                {% else %}
+                    <li>No experiments available. Please <button onclick="location.reload()" class="btn btn-lg btn-primary">refresh</button> to try again.</li>
+                {% endif %}
                 </ul>
-            </div>
-            <div class="col-md-6">
-                <h3><span class="glyphicon glyphicon-link"></span> Experiments</h3>
-                <ul>
-                    {% for experiment_name in binary_tree_experiments %}
-                        <li>
-                            <a href="/experiments/{{ experiment_name }}" > /experiments/{{ experiment_name }}</a>
-                            (<a href="/tree/{{ experiment_name }}" >tree</a>)
-                        </li>
-                    {%  endfor %}
-                    {% for experiment_name in other_experiments %}
-                        <li>
-                            <a href="/experiments/{{ experiment_name }}" > /experiments/{{ experiment_name }}</a>
-                        </li>
-                    {%  endfor %}
-                </ul>
-            </div>
-        </div> <!-- row -->
-    </div>
+        </div>
+    </div> <!-- row -->
+</div>
 {% endblock %}

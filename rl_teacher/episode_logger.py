@@ -5,11 +5,16 @@ from collections import deque
 import numpy as np
 import tensorflow as tf
 
+import os
+
 class EpisodeLogger(tf.summary.FileWriter):
     """Tracks and logs agent performance"""
 
     def __init__(self, name, timesteps_per_summary=int(1e3)):
-        logs_path = osp.expanduser('~/tb/rl-teacher/%s' % (name))
+
+        # logs_path = osp.expanduser('~/tb/rl-teacher/%s' % (name))
+        logs_path = os.path.join(os.path.expanduser('~'), 'tb', 'rl-teacher', name)
+        os.makedirs(logs_path, exist_ok=True)  # Create the directory if it doesn't exist
         super().__init__(logs_path)
 
         self.summary_count = 0

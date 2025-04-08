@@ -26,6 +26,7 @@
 
 from datetime import datetime
 from multiprocessing import Process, Queue, Value
+import queue
 
 import numpy as np
 import time
@@ -35,7 +36,7 @@ from ga3c.Environment import Environment
 from ga3c.Experience import Experience
 
 class ProcessAgent(Process):
-    def __init__(self, id, prediction_q, training_q, episode_log_q, reward_modifier_q=None):
+    def __init__(self, id, prediction_q, training_q, episode_log_q, reward_modifier_q=None, env=None, parentStats=None):
         super(ProcessAgent, self).__init__()
 
         self.id = id
@@ -44,7 +45,7 @@ class ProcessAgent(Process):
         self.episode_log_q = episode_log_q
         self.reward_modifier_q = reward_modifier_q
 
-        self.env = Environment()
+        self.env = Environment(env=env)
         self.num_actions = self.env.get_num_actions()
         self.onehots = np.eye(self.num_actions)
         self.actions = np.arange(self.num_actions)
@@ -53,6 +54,8 @@ class ProcessAgent(Process):
         # one frame at a time
         self.wait_q = Queue(maxsize=1)
         self.exit_flag = Value('i', 0)
+        
+        self.parentStats = parentStats
 
     @staticmethod
     def _accumulate_rewards(experiences, discount_factor, terminal_reward):
@@ -62,6 +65,9 @@ class ProcessAgent(Process):
             reward_sum = discount_factor * reward_sum + r
             experiences[t].reward = reward_sum
         return experiences[:-1]
+    
+    def stopStats(self):
+        self.parentStats.episode_count.value = Config.EPISODES
 
     def convert_data(self, experiences):
         x_ = np.array([exp.state for exp in experiences])
@@ -73,12 +79,17 @@ class ProcessAgent(Process):
         # put the state in the prediction q
         self.prediction_q.put((self.id, state))
         # wait for the prediction to come back
-        p, v = self.wait_q.get()
+        p, v = self.wait_q.get(timeout=10)
         return p, v
 
     def select_action(self, prediction):
         if Config.PLAY_MODE:
             action = np.argmax(prediction)
+            if action == 0:
+                # Select the second-best action (the second-highest probability)
+                print("Going for the second best action!")
+                second_best_action = np.argsort(prediction)[-2]  # Get the second-highest action
+                action = second_best_action
         else:
             action = np.random.choice(self.actions, p=prediction)
         return action
@@ -95,19 +106,37 @@ class ProcessAgent(Process):
             "human_obs": [],
         }
 
-        time_count = 0
+        info = {
+            "stop_flag": False
+        }
 
+        time_count = 0
         while not done:
+            if self.exit_flag.value == 1:
+                print("we've been told to die. so we do.")
+                break
+
             # very first few frames
             if self.env.current_state is None:
                 self.env.step(0)  # 0 == NOOP
                 continue
 
-            prediction, value = self.predict(self.env.current_state)
+            try: 
+                prediction, value = self.predict(self.env.current_state)
+            except queue.Empty:
+                if self.exit_flag.value == 1:
+                    print("agent queue timed out. breaking")
+                    break
+                continue  # Skip if no prediction was made within the timeout
+
             action = self.select_action(prediction)
             reward, done, info = self.env.step(action)
             exp = Experience(self.env.previous_state, action, prediction, reward, done, info["human_obs"])
             experiences.append(exp)
+            if info["stop_flag"]:
+                done = True
+                self.exit_flag.value = True
+                self.stopStats()
 
             if done or time_count == Config.TIME_MAX:
                 terminal_reward = 0 if done else value

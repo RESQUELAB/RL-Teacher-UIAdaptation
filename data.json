@@ -1,0 +1,136 @@
+{
+    "USER": {
+        "AGE": [
+            "noObt"
+        ]
+    },
+    "PLATFORM": {
+        "DEVICE": [
+            "noObt"
+        ]
+    },
+    "ENVIRONMENT": {
+        "LOCATION": [
+            "noObt"
+        ]
+    },
+    "UIDESIGN": {
+        "DISPLAY": [
+            "list",
+            "grid2",
+            "grid3",
+            "grid4",
+            "grid5"
+        ],
+        "THEME": [
+            "light",
+            "dark"
+        ],
+        "INFORMATION": [
+            "show",
+            "partial",
+            "hide"
+        ],
+        "FONT_SIZE": [
+            "small",
+            "default",
+            "big"
+        ]
+    },
+    "ACTIONS": {
+        "MODE": "WEBSOCKET",
+        "0": {
+            "name": "No operate",
+            "target": "pass",
+            "value": "pass",
+            "api_call": "pass"
+        },
+        "1": {
+            "name": "Change to list",
+            "target": "display",
+            "value": "list",
+            "api_call": "adaptation display list"
+        },
+        "2": {
+            "name": "Change to grid2",
+            "target": "display",
+            "value": "grid2",
+            "api_call": "adaptation display grid2"
+        },
+        "3": {
+            "name": "Change to grid3",
+            "target": "display",
+            "value": "grid3",
+            "api_call": "adaptation display grid3"
+        },
+        "4": {
+            "name": "Change to grid4",
+            "target": "display",
+            "value": "grid4",
+            "api_call": "adaptation display grid4"
+        },
+        "5": {
+            "name": "Change to grid5",
+            "target": "display",
+            "value": "grid5",
+            "api_call": "adaptation display grid5"
+        },
+        "6": {
+            "name": "Change to light",
+            "target": "theme",
+            "value": "light",
+            "api_call": "adaptation theme light"
+        },
+        "7": {
+            "name": "Change to dark",
+            "target": "theme",
+            "value": "dark",
+            "api_call": "adaptation theme dark"
+        },
+        "8": {
+            "name": "Change to show",
+            "target": "information",
+            "value": "show",
+            "api_call": "adaptation information show"
+        },
+        "9": {
+            "name": "Change to partial",
+            "target": "information",
+            "value": "partial",
+            "api_call": "adaptation information partial"
+        },
+        "10": {
+            "name": "Change to hide",
+            "target": "information",
+            "value": "hide",
+            "api_call": "adaptation information hide"
+        },
+        "11": {
+            "name": "Change to small",
+            "target": "font_size",
+            "value": "small",
+            "api_call": "adaptation font_size small"
+        },
+        "12": {
+            "name": "Change to default",
+            "target": "font_size",
+            "value": "default",
+            "api_call": "adaptation font_size default"
+        },
+        "13": {
+            "name": "Change to big",
+            "target": "font_size",
+            "value": "big",
+            "api_call": "adaptation font_size big"
+        }
+    },
+    "REWARD": {
+        "MODE": "HCI"
+    },
+    "API_CONNECTION": {
+        "HOST": "127.0.0.1",
+        "PORT": 50755,
+        "RESOURCES": "",
+        "RENDER_RESOURCE": ""
+    }
+}

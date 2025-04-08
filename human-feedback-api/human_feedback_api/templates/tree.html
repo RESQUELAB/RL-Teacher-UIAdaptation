@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% load staticfiles %}
 {% block content %}
+<!-- Go Back Button -->
+<div style="position: relative; z-index: 10000;; text-align: center; margin-top: 20px;">
+  <button class="btn btn-lg btn-primary" onclick="window.history.back();">Go Back</button>
+</div>
 
 <canvas id="backdrop" style="position: absolute; left: 0px; top: 0px;" width="{{ total.width }}px" height="{{ total.height }}px"></canvas>
 <script>

@@ -7,6 +7,8 @@ import subprocess
 import numpy as np
 from gym import error
 
+from PIL import Image
+
 def upload_to_gcs(local_path, gcs_path):
     assert osp.isfile(local_path), "%s must be a file" % local_path
     assert gcs_path.startswith("gs://"), "%s must start with gs://" % gcs_path
@@ -26,19 +28,42 @@ def export_video(frames, fname, fps=10):
     assert "mp4" in fname, "Name requires .mp4 suffix"
     assert osp.isdir(osp.dirname(fname)), "%s must be a directory" % osp.dirname(fname)
 
-    raw_image = isinstance(frames[0], tuple)
-    shape = frames[0][0] if raw_image else frames[0].shape
+    # Resize frames to have dimensions divisible by 2
+    frames_resized = []
+    for frame in frames:
+        if isinstance(frame, tuple):
+            frames_resized.append(frame)  # Raw image frames, no need to resize
+        else:
+            if isinstance(frame, np.ndarray):
+                w, h = frame.shape[:2]
+                w = w - (w % 2)  # Make width divisible by 2
+                h = h - (h % 2)  # Make height divisible by 2
+                frame_resized = frame[:w, :h]
+                frames_resized.append(frame_resized)
+
+    '''
+        MAKE SURE IF THE FRAME IS IN A VIDEO FORMAT OR IN UI DESIGN FORMAT.
+        THEN CREATE THE CORRESPONDING VIDEO.
+    '''
+    print("EXPORT VIDEO!")
+    raw_image = isinstance(frames_resized[0], tuple)
+    shape = frames_resized[0][0] if raw_image else frames_resized[0].shape
     greyscale = (len(shape) == 2)
-    if greyscale:  # Greyscale
+    if greyscale: 
         shape = shape + (3,)
     encoder = ImageEncoder(fname, shape, fps)
-    for frame in frames:
+    for frame in frames_resized:
         if raw_image:
+            print("raw image!")
             encoder.proc.stdin.write(frame[1])
         else:
             if greyscale:
                 # Convert cells of domain [-1, 1) to triplets of range [0, 256)
                 frame = np.transpose(np.tile((frame + 1) * 128, (3, 1, 1)), (1, 2, 0)).astype(np.uint8)
+            else:
+                if frame.shape[-1] == 4:  # BGRA to RGBA
+                    frame = frame[..., [2, 1, 0, 3]]  # Swap B and R channels, keep G and A
+                    
             encoder.capture_frame(frame)
     encoder.close()
 

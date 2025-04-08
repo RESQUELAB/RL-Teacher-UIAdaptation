@@ -24,6 +24,7 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import queue
 import sys
 import time
 from datetime import datetime
@@ -50,14 +51,25 @@ class ProcessStats(Process):
         self.predictor_count = Value('i', 0)
         self.agent_count = Value('i', 0)
         self.total_frame_count = 0
+        self.exit_flag = Value('i', 0)  # Exit flag to gracefully shut down the process
 
     def FPS(self):
         # average FPS from the beginning of the training (not current FPS)
-        return np.ceil(self.total_frame_count / (time.time() - self.start_time))
+        time_elapsed = time.time() - self.start_time
+        # Avoid division by zero
+        if time_elapsed <= 0:
+            return 0  
+
+        return np.ceil(self.total_frame_count / time_elapsed)
 
     def TPS(self):
+        time_elapsed = time.time() - self.start_time
+        # Avoid division by zero
+        if time_elapsed <= 0:
+            return 0  # or some other default value
+        
         # average TPS from the beginning of the training (not current TPS)
-        return np.ceil(self.training_count.value / (time.time() - self.start_time))
+        return np.ceil(self.training_count.value / time_elapsed)
 
     def run(self):
         with open(Config.RESULTS_FILENAME, 'a') as results_logger:
@@ -68,7 +80,17 @@ class ProcessStats(Process):
             self.start_time = time.time()
             first_time = datetime.now()
             while True:
-                episode_time, reward, length = self.episode_log_q.get()
+                # print("WHILE AGAIN: ", self.exit_flag, " - Val: " ,self.exit_flag.value)
+                if self.exit_flag.value == 1:  # Check exit flag to stop process
+                    print("Exiting ProcessStats as per exit_flag.")
+                    break
+
+                try:
+                    episode_time, reward, length = self.episode_log_q.get(timeout=10)
+                except queue.Empty:
+                    print("No data in episode_log_q for 10 seconds")
+                    continue
+
                 results_logger.write('%s, %d, %d\n' % (episode_time.strftime("%Y-%m-%d %H:%M:%S"), reward, length))
                 results_logger.flush()
 
@@ -91,11 +113,20 @@ class ProcessStats(Process):
                     first_time = old_episode_time
 
                 results_q.put((episode_time, reward, length))
-
                 if self.episode_count.value % Config.SAVE_FREQUENCY == 0:
+                    print("self.episode_count:: " , self.episode_count)
                     self.should_save_model.value = 1
 
                 if self.episode_count.value % Config.PRINT_STATS_FREQUENCY == 0:
+                    
+                    time_diff = (datetime.now() - first_time).total_seconds()
+
+                    # Check if the time difference is too small or zero
+                    if time_diff > 0:
+                        pps = rolling_frame_count / time_diff
+                    else:
+                        pps = 0  # Or set it to a default safe value
+
                     print(
                         '[Time: %8d] '
                         '[Episode: %8d Score: %10.4f] '
@@ -106,7 +137,8 @@ class ProcessStats(Process):
                         % (int(time.time() - self.start_time),
                            self.episode_count.value, reward,
                            rolling_reward / results_q.qsize(),
-                           rolling_frame_count / (datetime.now() - first_time).total_seconds(),
+                        #    rolling_frame_count / (datetime.now() - first_time).total_seconds(),
+                           pps,
                            self.FPS(), self.TPS(),
                            self.trainer_count.value, self.predictor_count.value, self.agent_count.value,
                            beta))

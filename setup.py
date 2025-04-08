@@ -20,6 +20,8 @@ setup(
         'WhiteNoise==3.2.2',
         'dj-database-url==0.4.0',
         'django==1.11',
+        'djangorestframework==3.9.0',
+        'djongo==1.2.26',
         'scipy==1.2.2',
         'protobuf==3.6.1',
         'keras==2.1.6',
